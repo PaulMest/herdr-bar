@@ -185,7 +185,7 @@ fn answer(shared: &Shared, data: &mut Value, method: &str, params: &Value) -> Ve
         "plugin.list" => {
             let plugins = shared.plugins.clone().unwrap_or_else(|| {
                 let entry: Map = [
-                    ("plugin_id".to_string(), Value::str("herdr-bar")),
+                    ("plugin_id".to_string(), Value::str("paulmest.herdr-bar")),
                     ("enabled".to_string(), Value::Bool(true)),
                     ("plugin_root".to_string(), Value::str(shared.plugin_root.clone())),
                 ]

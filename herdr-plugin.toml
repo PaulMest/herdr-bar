@@ -1,4 +1,4 @@
-id = "herdr-bar"
+id = "paulmest.herdr-bar"
 name = "Bar"
 version = "0.14.0"
 # Requires startup hooks and agent session metadata from Herdr 0.9.

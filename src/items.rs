@@ -598,7 +598,7 @@ pub fn build_action_items(actions: &[Value], enabled: Option<&[String]>, platfor
         if enabled.is_some_and(|enabled| !enabled.contains(&plugin_id)) {
             continue;
         }
-        if plugin_id == "herdr-bar" && (action_id == "open" || action_id == "open-windows") {
+        if plugin_id == "paulmest.herdr-bar" && (action_id == "open" || action_id == "open-windows") {
             continue;
         }
         // No list means every platform the plugin runs on, as in Herdr.
@@ -841,9 +841,9 @@ mod tests {
                  "description": "Every dev server running", "contexts": ["global"], "platforms": ["linux", "macos", "windows"]},
                 {"plugin_id": "herdr-servers", "action_id": "doctor", "title": "Check servers setup"},
                 {"plugin_id": "viewer", "action_id": "open-elsewhere", "title": "Open file viewer", "platforms": ["plan9"]},
-                {"plugin_id": "herdr-bar", "action_id": "open", "title": "Open bar"},
-                {"plugin_id": "herdr-bar", "action_id": "open-windows", "title": "Open bar", "platforms": ["windows"]},
-                {"plugin_id": "herdr-bar", "action_id": "stop-titles", "title": "Stop tab watcher"},
+                {"plugin_id": "paulmest.herdr-bar", "action_id": "open", "title": "Open bar"},
+                {"plugin_id": "paulmest.herdr-bar", "action_id": "open-windows", "title": "Open bar", "platforms": ["windows"]},
+                {"plugin_id": "paulmest.herdr-bar", "action_id": "stop-titles", "title": "Stop tab watcher"},
                 {"plugin_id": "herdr-swarm", "action_id": "session", "title": "Swarm session", "contexts": ["pane"]},
                 {"plugin_id": "clipper", "action_id": "copy", "title": "Copy selection", "contexts": ["selection"]},
                 {"plugin_id": "clipper", "action_id": "paste", "title": "Paste", "contexts": ["selection", "global"]},
@@ -862,14 +862,14 @@ mod tests {
 
     #[test]
     fn action_rows_keep_what_herdr_would_run_from_here() {
-        let mut enabled: Vec<String> = ["herdr-servers", "viewer", "herdr-bar", "herdr-swarm", "clipper", "untitled"]
+        let mut enabled: Vec<String> = ["herdr-servers", "viewer", "paulmest.herdr-bar", "herdr-swarm", "clipper", "untitled"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         let expected = vec![
             "action:herdr-servers.open",
             "action:herdr-servers.doctor",
-            "action:herdr-bar.stop-titles",
+            "action:paulmest.herdr-bar.stop-titles",
             "action:herdr-swarm.session",
             "action:clipper.paste",
         ];

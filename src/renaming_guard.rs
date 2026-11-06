@@ -164,7 +164,7 @@ pub fn check_plugins(plugins: &[Map], extra: &[String]) -> Result<()> {
     for plugin in plugins {
         let plugin_id = plugin.get("plugin_id").unwrap_or(&pyjson::NULL);
         let enabled = plugin.get("enabled").map(|v| v.truthy()).unwrap_or(false);
-        if !enabled || plugin_id.as_str() == Some("herdr-bar") {
+        if !enabled || plugin_id.as_str() == Some("paulmest.herdr-bar") {
             continue;
         }
         let source = match plugin.get("source") {
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn self_and_unrelated_plugins_do_not_block() {
         let plugins = [
-            plugin(r#"{"plugin_id": "herdr-bar", "enabled": true, "description": "Automatic tab titles"}"#),
+            plugin(r#"{"plugin_id": "paulmest.herdr-bar", "enabled": true, "description": "Automatic tab titles"}"#),
             plugin(r#"{"plugin_id": "herdr-newtab-plus", "enabled": true, "description": "Pick a folder and open a tab"}"#),
             plugin(r#"{"plugin_id": "herdr-grid", "enabled": true, "name": "Agent Grid"}"#),
         ];

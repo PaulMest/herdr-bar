@@ -122,7 +122,7 @@ impl FakeHerdr {
         let methods = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let plugins = format!(
-            r#"{{"result": {{"plugins": [{{"plugin_id": "herdr-bar", "enabled": true, "plugin_root": {}}}]}}}}"#,
+            r#"{{"result": {{"plugins": [{{"plugin_id": "paulmest.herdr-bar", "enabled": true, "plugin_root": {}}}]}}}}"#,
             quote(&registered_root.to_string_lossy())
         );
         let title = title.to_string();

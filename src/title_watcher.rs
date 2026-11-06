@@ -309,7 +309,7 @@ fn registered_root(client: &mut HerdrClient) -> Result<Option<PathBuf>> {
     let plugins = installed_plugins(client)?;
     check_plugins(&plugins, &Config::load().tab_renaming_plugins)?;
     for plugin in &plugins {
-        if plugin.get("plugin_id").and_then(|v| v.as_str()) == Some("herdr-bar") {
+        if plugin.get("plugin_id").and_then(|v| v.as_str()) == Some("paulmest.herdr-bar") {
             if !plugin.get("enabled").map(|v| v.truthy()).unwrap_or(false) {
                 return Ok(None);
             }
@@ -902,7 +902,7 @@ mod tests {
         fn plugins(root: &Path, enabled: bool, extra: &str) -> Value {
             let root = pyjson::dumps(&Value::str(root.to_string_lossy()), false);
             json(&format!(
-                r#"{{"plugins": [{{"plugin_id": "herdr-bar", "enabled": {}, "plugin_root": {}}}{}]}}"#,
+                r#"{{"plugins": [{{"plugin_id": "paulmest.herdr-bar", "enabled": {}, "plugin_root": {}}}{}]}}"#,
                 if enabled { "true" } else { "false" },
                 root,
                 extra

@@ -1,6 +1,8 @@
 # herdr-bar — auto tab titles, agent icons & Cmd+K search
 
-[![ci](https://github.com/jeffarese/herdr-bar/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffarese/herdr-bar/actions/workflows/ci.yml)
+> Fork of [jeffarese/herdr-bar](https://github.com/jeffarese/herdr-bar), maintained by Paul Mestemaker under the plugin id `paulmest.herdr-bar`.
+
+[![ci](https://github.com/PaulMest/herdr-bar/actions/workflows/ci.yml/badge.svg)](https://github.com/PaulMest/herdr-bar/actions/workflows/ci.yml)
 
 **A [Herdr](https://herdr.dev) plugin for automatic tab titles, recognizable
 agent icons, and fast session switching.** Press Cmd+K, type a few letters of a
@@ -44,7 +46,7 @@ quick switcher, for the terminal.
 ## Install
 
 ```bash
-herdr plugin install jeffarese/herdr-bar
+herdr plugin install PaulMest/herdr-bar --ref chore/paulmest-plugin-identity
 ```
 
 Then bind a key (herdr does not add keybindings for you). In your herdr
@@ -54,7 +56,7 @@ Then bind a key (herdr does not add keybindings for you). In your herdr
 [[keys.command]]
 key = "prefix+k"
 type = "plugin_action"
-command = "herdr-bar.open"
+command = "paulmest.herdr-bar.open"
 description = "command bar"
 ```
 
@@ -69,8 +71,8 @@ against the release's `SHA256SUMS`; if that fails, it builds from source with
 
 **Upgrading from 0.8 or older.** The old Python title watcher keeps running
 after the upgrade, and tab titles stop updating. Run
-`herdr plugin action invoke herdr-bar.stop-titles`, then
-`herdr plugin action invoke herdr-bar.start-titles`, once. Restarting herdr is
+`herdr plugin action invoke paulmest.herdr-bar.stop-titles`, then
+`herdr plugin action invoke paulmest.herdr-bar.start-titles`, once. Restarting herdr is
 not enough, because the old watcher survives a server restart.
 
 **Windows.** The build step runs in Windows PowerShell. Everything works on
@@ -92,7 +94,7 @@ switches in your [config](#configuring) control the two features:
 
 Set `"auto_titles": false` to opt out of task naming, or `"tab_status": true`
 to enable status prefixes. An explicit `false` is preserved across upgrades.
-Open the bar or run `herdr plugin action invoke herdr-bar.start-titles` to start
+Open the bar or run `herdr plugin action invoke paulmest.herdr-bar.start-titles` to start
 the watcher in an already running server. A running watcher reloads
 these settings every two seconds; disabling both restores status prefixes it
 still owns and exits. Task titles already written are kept. The command bar,
@@ -155,10 +157,10 @@ requests are made.
 - **Starts when enabled.** Herdr's startup and agent-detection hooks start a
   single background watcher per server. Opening the bar also ensures it is running. After
   linking or enabling the plugin in an already running server, start it with
-  `herdr plugin action invoke herdr-bar.start-titles`.
-- **Stop or resume.** `herdr plugin action invoke herdr-bar.stop-titles` stops
+  `herdr plugin action invoke paulmest.herdr-bar.start-titles`.
+- **Stop or resume.** `herdr plugin action invoke paulmest.herdr-bar.stop-titles` stops
   naming for this server; event hooks and popup opens leave it stopped until
-  you invoke `herdr-bar.start-titles` again. Disabling or uninstalling the
+  you invoke `paulmest.herdr-bar.start-titles` again. Disabling or uninstalling the
   plugin stops its connected watchers within ten seconds.
 - **Local sources.** Terminal task titles work even when Herdr has no agent
   session ID, with ownership tied to the pane and terminal. Claude transcript
@@ -241,7 +243,7 @@ unknown. With several agents in one tab, the most urgent one leads.
 - **Logos need the font.** Logos appear under the same `agent_icons` rule as
   the bar; without the font, tabs show the status glyph alone.
 - **Turning it off.** Set `"tab_status": false` in the [config](#configuring),
-  or stop the watcher with `herdr-bar.stop-titles`; both restore names whose
+  or stop the watcher with `paulmest.herdr-bar.stop-titles`; both restore names whose
   prefixes the watcher still owns. `tab_status` does not control task naming:
   set `"auto_titles": false` as well to disable all automatic tab updates.
 
@@ -260,7 +262,7 @@ Cmd+K, add a second binding for a chord your terminal can actually deliver —
 [[keys.command]]
 key = ["prefix+k", "ctrl+alt+k"]
 type = "plugin_action"
-command = "herdr-bar.open"
+command = "paulmest.herdr-bar.open"
 description = "command bar"
 ```
 
@@ -455,7 +457,7 @@ in the server's state subdirectory. Tab titles themselves are stored by Herdr.
 ## Development
 
 ```bash
-git clone https://github.com/jeffarese/herdr-bar
+git clone https://github.com/PaulMest/herdr-bar
 cd herdr-bar
 HERDR_BAR_BUILD=source sh scripts/install.sh   # build this clone (Rust 1.88+)
 herdr plugin link .         # link never runs the build step, so build first

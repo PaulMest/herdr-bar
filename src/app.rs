@@ -1407,14 +1407,14 @@ mod tests {
         {"plugin_id": "herdr-servers", "action_id": "broken", "title": "Broken servers"},
         {"plugin_id": "herdr-servers", "action_id": "week", "title": "Weekly digest"},
         {"plugin_id": "herdr-stats", "action_id": "open", "title": "Open stats"},
-        {"plugin_id": "herdr-bar", "action_id": "open", "title": "Open bar"}
+        {"plugin_id": "paulmest.herdr-bar", "action_id": "open", "title": "Open bar"}
     ]"#;
 
     #[cfg(unix)]
     const PLUGINS: &str = r#"[
         {"plugin_id": "herdr-servers", "enabled": true},
         {"plugin_id": "herdr-stats", "enabled": false},
-        {"plugin_id": "herdr-bar", "enabled": true}
+        {"plugin_id": "paulmest.herdr-bar", "enabled": true}
     ]"#;
 
     /// What the Python tests' FakeClient held.

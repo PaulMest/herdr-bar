@@ -10984,7 +10984,7 @@
    "{watcher}/title-watcher.stopped": ""
   },
   "stderr": "",
-  "stdout": "herdr-bar - jump to any Herdr tab, pane, or agent\n\nusage: run.py [options]\n\noptions:\n  --open      open the bar popup through the Herdr CLI\n  --list      print the rows the bar would show, as JSON\n  --doctor    print environment diagnostics\n  --version   print the plugin version\n  --help      show this message\n\nNormally Herdr launches this itself:\n  herdr plugin action invoke herdr-bar.open\n"
+  "stdout": "herdr-bar - jump to any Herdr tab, pane, or agent\n\nusage: run.py [options]\n\noptions:\n  --open      open the bar popup through the Herdr CLI\n  --list      print the rows the bar would show, as JSON\n  --doctor    print environment diagnostics\n  --version   print the plugin version\n  --help      show this message\n\nNormally Herdr launches this itself:\n  herdr plugin action invoke paulmest.herdr-bar.open\n"
  },
  "cli-help": {
   "changes": [],
@@ -10993,7 +10993,7 @@
    "{watcher}/title-watcher.stopped": ""
   },
   "stderr": "",
-  "stdout": "herdr-bar - jump to any Herdr tab, pane, or agent\n\nusage: run.py [options]\n\noptions:\n  --open      open the bar popup through the Herdr CLI\n  --list      print the rows the bar would show, as JSON\n  --doctor    print environment diagnostics\n  --version   print the plugin version\n  --help      show this message\n\nNormally Herdr launches this itself:\n  herdr plugin action invoke herdr-bar.open\n"
+  "stdout": "herdr-bar - jump to any Herdr tab, pane, or agent\n\nusage: run.py [options]\n\noptions:\n  --open      open the bar popup through the Herdr CLI\n  --list      print the rows the bar would show, as JSON\n  --doctor    print environment diagnostics\n  --version   print the plugin version\n  --help      show this message\n\nNormally Herdr launches this itself:\n  herdr plugin action invoke paulmest.herdr-bar.open\n"
  },
  "cli-list": {
   "changes": [],

@@ -29,7 +29,7 @@ options:
   --help      show this message
 
 Normally Herdr launches this itself:
-  herdr plugin action invoke herdr-bar.open
+  herdr plugin action invoke paulmest.herdr-bar.open
 ";
 
 fn out(text: &str) {

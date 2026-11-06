@@ -23226,7 +23226,7 @@
    "plugins": [
     {
      "enabled": true,
-     "plugin_id": "herdr-bar",
+     "plugin_id": "paulmest.herdr-bar",
      "plugin_root": "/Users/jeffarese/workspace/herdr-bar"
     },
     {

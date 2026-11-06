@@ -199,7 +199,7 @@ fn with_local_root(plugins: &Value, root: &Path) -> Value {
     if let Value::List(entries) = &mut plugins {
         for entry in entries.iter_mut() {
             if let Some(entry) = entry.as_dict_mut() {
-                if entry.get("plugin_id").and_then(Value::as_str) == Some("herdr-bar") && entry.contains_key("plugin_root") {
+                if entry.get("plugin_id").and_then(Value::as_str) == Some("paulmest.herdr-bar") && entry.contains_key("plugin_root") {
                     entry.insert("plugin_root", Value::str(root.to_str().unwrap()));
                 }
             }
