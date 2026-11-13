@@ -6,6 +6,7 @@ mod auto_title;
 mod cli;
 mod client;
 mod config;
+mod fulltext;
 mod fuzzy;
 mod fxhash;
 mod host;

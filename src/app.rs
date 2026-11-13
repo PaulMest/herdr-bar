@@ -3,6 +3,7 @@
 use crate::age::{elapsed_seconds_many, pid_for};
 use crate::client::{HerdrClient, Result};
 use crate::config::Config;
+use crate::fulltext::{self, PaneHits, Target};
 use crate::fuzzy::{match_prepared, split_query, Match, Term};
 use crate::fxhash::FxHashMap;
 use crate::icons;
@@ -22,7 +23,9 @@ use std::time::Instant;
 
 /// The filters, in `tab` order. "action" only exists with the action rows,
 /// so it stays last: without them, `tab` cycles through the rest.
-pub const SCOPES: &[&str] = &["all", "agent", "pane", "tab", "blocked", "action"];
+/// "text" is the full-text search: rows come from a background search of
+/// transcripts and scrollback instead of the fuzzy match.
+pub const SCOPES: &[&str] = &["all", "agent", "pane", "tab", "blocked", "text", "action"];
 
 fn scope_sigil(text: &str) -> Option<&'static str> {
     Some(match text {
@@ -30,6 +33,7 @@ fn scope_sigil(text: &str) -> Option<&'static str> {
         "%" => "pane",
         "$" => "tab",
         "!" => "blocked",
+        "/" => "text",
         ">" => "action",
         _ => return None,
     })
@@ -42,6 +46,7 @@ fn scope_chip(scope: &str) -> &'static str {
         "pane" => "% panes",
         "tab" => "$ shells",
         "blocked" => "! needs you",
+        "text" => "/ full text",
         "action" => "> actions",
         _ => "",
     }
@@ -50,13 +55,17 @@ fn scope_chip(scope: &str) -> &'static str {
 pub const TITLE_BONUS: i64 = 40;
 pub const PREVIEW_DEBOUNCE: f64 = 0.07;
 pub const PREVIEW_TTL: f64 = 1.5;
+/// Where a full-text row keeps its detail's match positions (see `text_row`).
+const TEXT_DETAIL_FIELD: usize = usize::MAX >> 1;
+/// Full-text search waits for typing to pause this long.
+pub const TEXT_DEBOUNCE: f64 = 0.35;
 pub const ESC_TIMEOUT: f64 = 0.04;
 pub const STATUS_TTL: f64 = 2.5;
 
-pub const PLACEHOLDER: &str = "jump to a tab, pane or agent…    @ agents   % panes   $ shells   ! needs you";
+pub const PLACEHOLDER: &str = "jump to a tab, pane or agent…    @ agents   % panes   $ shells   ! needs you   / text";
 pub const PLACEHOLDER_SHORT: &str = "jump to a tab, pane or agent…";
 pub const PLACEHOLDER_ACTIONS: &str =
-    "jump to a tab, pane or agent, or run an action…    @ agents   % panes   $ shells   ! needs you   > actions";
+    "jump to a tab, pane or agent, or run an action…    @ agents   % panes   $ shells   ! needs you   / text   > actions";
 pub const PLACEHOLDER_ACTIONS_SHORT: &str = "jump, or run an action…";
 
 /// time.monotonic(): seconds on a clock that only moves forward. It starts
@@ -149,6 +158,8 @@ pub struct Pool {
     /// The tab and agent items, then the pane items.
     items: Vec<Item>,
     item_count: usize,
+    /// Every pane, for the full-text search.
+    targets: Vec<Target>,
 }
 
 impl Pool {
@@ -167,7 +178,7 @@ impl Pool {
         }
         let item_count = items.len();
         items.extend(build_pane_items(snapshot));
-        Pool { workspace_count, items, item_count }
+        Pool { workspace_count, items, item_count, targets: fulltext::targets(snapshot) }
     }
 }
 
@@ -209,6 +220,18 @@ pub struct Bar {
     ages: HashMap<String, Option<(f64, f64)>>,
     age_queue: Vec<String>,
     last_refresh: f64,
+    /// Full-text search: the panes to search, the search running in the
+    /// background, the query it was last asked for, when to start it, the
+    /// latest results, and which result each row shows.
+    targets: Vec<Target>,
+    text_search: fulltext::Background,
+    text_asked: String,
+    text_due: Option<f64>,
+    text_results: Vec<PaneHits>,
+    /// The query `text_results` answer, which highlights them: the asked
+    /// query can run ahead while a newer search is pending.
+    text_shown: String,
+    text_rows: Vec<usize>,
     dirty: bool,
     list_top: isize,
     list_height: isize,
@@ -253,6 +276,13 @@ impl Bar {
             ages: HashMap::new(),
             age_queue: Vec::new(),
             last_refresh: 0.0,
+            targets: Vec::new(),
+            text_search: fulltext::Background::default(),
+            text_asked: String::new(),
+            text_due: None,
+            text_results: Vec::new(),
+            text_shown: String::new(),
+            text_rows: Vec::new(),
             dirty: true,
             list_top: 2,
             list_height: 10,
@@ -331,6 +361,7 @@ impl Bar {
             }
         }
         self.item_count = pool.item_count;
+        self.targets = pool.targets;
         let mut items = pool.items;
         self.pane_end = items.len();
         items.extend(self.actions.iter().cloned());
@@ -341,8 +372,166 @@ impl Bar {
     }
 
     pub fn rebuild(&mut self, keep_key: Option<String>) {
-        self.rows = self.filter();
+        if self.scope == "text" {
+            self.schedule_text();
+            let (rows, results) = self.text_filter();
+            self.rows = rows;
+            self.text_rows = results;
+        } else {
+            self.leave_text();
+            self.rows = self.filter();
+        }
         self.reselect(keep_key);
+    }
+
+    // -- full text ----------------------------------------------------------
+
+    /// Queue a search for the query, unless it is the one already asked for.
+    fn schedule_text(&mut self) {
+        let query = pystr::strip(&self.query).to_string();
+        if query == self.text_asked && (self.text_due.is_some() || self.text_search.is_running() || !query.is_empty()) {
+            return;
+        }
+        self.text_asked = query.clone();
+        self.text_search.cancel();
+        if char_len(&query) < fulltext::MIN_QUERY {
+            self.text_due = None;
+            self.text_results.clear();
+            self.text_shown.clear();
+            return;
+        }
+        self.text_due = Some(monotonic() + TEXT_DEBOUNCE);
+    }
+
+    fn leave_text(&mut self) {
+        if self.text_due.is_some() || self.text_search.is_running() || !self.text_asked.is_empty() {
+            self.text_search.cancel();
+            self.text_due = None;
+            self.text_asked.clear();
+            self.text_results.clear();
+            self.text_shown.clear();
+        }
+        self.text_rows.clear();
+    }
+
+    /// Whether a search is waiting to start or still running.
+    pub fn text_busy(&self) -> bool {
+        self.text_due.is_some() || self.text_search.is_running()
+    }
+
+    /// Start a due search, and take in a finished one.
+    fn pump_text(&mut self) {
+        if let Some(due) = self.text_due {
+            if monotonic() >= due {
+                self.text_due = None;
+                self.text_search.start(self.targets.clone(), self.text_asked.clone());
+                self.dirty = true;
+            }
+        }
+        if let Some((query, hits)) = self.text_search.poll() {
+            if self.scope == "text" && query == self.text_asked {
+                self.text_results = hits;
+                self.text_shown = query;
+                let (rows, results) = self.text_filter();
+                self.rows = rows;
+                self.text_rows = results;
+                self.selected = 0;
+                self.offset = 0;
+            }
+            self.dirty = true;
+        }
+    }
+
+    /// The row for each pane with hits: its agent row, else its named pane
+    /// row, else its tab's row. Panes that land on a row already taken
+    /// (two shells in one tab) keep the first, newest one.
+    fn text_filter(&self) -> (Vec<Row>, Vec<usize>) {
+        let mut rows = Vec::new();
+        let mut results = Vec::new();
+        let mut used: Vec<usize> = Vec::new();
+        let regular = 0..self.item_count;
+        let panes = self.item_count..self.pane_end;
+        for (at, found) in self.text_results.iter().enumerate() {
+            let pool = &self.pool;
+            let same_pane = |i: &usize| pool[*i].pane_id.as_deref() == Some(found.pane_id.as_str());
+            let same_tab = |i: &usize| pool[*i].tab_id.as_deref() == Some(found.tab_id.as_str());
+            let item = regular
+                .clone()
+                .find(|i| pool[*i].kind == KIND_AGENT && same_pane(i))
+                .or_else(|| panes.clone().find(same_pane))
+                .or_else(|| regular.clone().find(|i| pool[*i].kind == KIND_TAB && same_tab(i)))
+                .or_else(|| regular.clone().find(|i| pool[*i].kind != KIND_SPACE && same_tab(i)));
+            let Some(item) = item else { continue };
+            if used.contains(&item) {
+                continue;
+            }
+            used.push(item);
+            rows.push(Row { item, positions: Vec::new(), field_positions: BTreeMap::new() });
+            results.push(at);
+        }
+        (rows, results)
+    }
+
+    /// A full-text row as drawn: its item with the hit count and latest hit
+    /// as the dimmer detail, and a row marking the matches inside it.
+    fn text_row(&self, position: usize, item_index: usize) -> Option<(Item, Row)> {
+        let found = self.text_result(position)?;
+        let mut item = self.pool[item_index].clone();
+        let hits = if found.count == 1 { "1 hit".to_string() } else { format!("{} hits", found.count) };
+        let snippet = found.hits.last().map(|hit| hit.snippet.as_str()).unwrap_or("");
+        item.detail = format!("{} · {}", hits, snippet);
+        // render_row finds the detail's marks under `detail_field`; a key no
+        // real field has keeps them off every other part of the row.
+        item.detail_field = TEXT_DETAIL_FIELD as isize;
+        let marks = self.text_needle().map(|needle| fulltext::match_positions(&needle, &item.detail)).unwrap_or_default();
+        let mut field_positions = BTreeMap::new();
+        field_positions.insert(TEXT_DETAIL_FIELD, marks);
+        Some((item, Row { item: item_index, positions: Vec::new(), field_positions }))
+    }
+
+    fn text_result(&self, position: usize) -> Option<&PaneHits> {
+        self.text_rows.get(position).and_then(|at| self.text_results.get(*at))
+    }
+
+    /// The exact pane the chosen full-text row found its hits in, for the
+    /// jump to land on it rather than on the row's agent or tab.
+    pub fn chosen_text_pane(&self) -> Option<String> {
+        if self.scope != "text" || self.rows.is_empty() {
+            return None;
+        }
+        self.text_result(self.selected).map(|found| found.pane_id.clone())
+    }
+
+    fn text_needle(&self) -> Option<fulltext::Needle> {
+        (!self.text_shown.is_empty()).then(|| fulltext::Needle::new(&self.text_shown))
+    }
+
+    /// The selected row's hits, oldest first so the newest sit at the bottom
+    /// where the preview shows its tail, with the matches' char positions on
+    /// each line, a match a line break splits marked on both lines.
+    fn text_preview(&self, width: isize) -> (Vec<String>, Vec<Vec<usize>>) {
+        let Some(found) = (if self.rows.is_empty() { None } else { self.text_result(self.selected) }) else {
+            return (Vec::new(), Vec::new());
+        };
+        let needle = self.text_needle();
+        let (mut lines, mut marks) = (Vec::new(), Vec::new());
+        for hit in &found.hits {
+            let when = if hit.timestamp.len() >= 16 { hit.timestamp[5..16].replace('T', " ") } else { String::new() };
+            let label = if when.is_empty() { hit.role.to_string() } else { format!("{} {}", when, hit.role) };
+            lines.push(format!("── {} ", label));
+            marks.push(Vec::new());
+            for (line, line_marks) in fulltext::wrap_marked(&hit.context, width, needle.as_ref()) {
+                lines.push(line);
+                marks.push(line_marks);
+            }
+            lines.push(String::new());
+            marks.push(Vec::new());
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+            marks.pop();
+        }
+        (lines, marks)
     }
 
     fn reselect(&mut self, keep_key: Option<String>) {
@@ -498,7 +687,8 @@ impl Bar {
     }
 
     fn cycle_scope(&mut self, step: isize) {
-        let scopes = self.scopes();
+        // Full text only on request: typing "/" reaches it, tab never does.
+        let scopes: Vec<&'static str> = self.scopes().iter().copied().filter(|s| *s != "text").collect();
         let index = scopes.iter().position(|s| *s == self.scope).unwrap_or(0) as isize;
         self.scope = scopes[(index + step).rem_euclid(scopes.len() as isize) as usize];
         self.selected = 0;
@@ -560,7 +750,16 @@ impl Bar {
     pub fn handle_key(&mut self, name: &str) -> Option<Outcome> {
         match name {
             "esc" | "ctrl+c" | "ctrl+g" | "ctrl+q" => return Some(Outcome::Cancel),
-            "enter" => return if self.rows.is_empty() { None } else { Some(Outcome::Confirm) },
+            "enter" => {
+                if self.scope == "text" && self.text_busy() {
+                    // The rows are an older query's: search now instead of jumping.
+                    if self.text_due.is_some() {
+                        self.text_due = Some(0.0);
+                    }
+                    return None;
+                }
+                return if self.rows.is_empty() { None } else { Some(Outcome::Confirm) };
+            }
             "up" | "ctrl+p" | "ctrl+k" => self.move_by(-1, true),
             "down" | "ctrl+n" | "ctrl+j" => self.move_by(1, true),
             "tab" => self.cycle_scope(1),
@@ -966,11 +1165,15 @@ impl Bar {
 
         let mut rows: Vec<String> = Vec::new();
         let chip = scope_chip(self.scope);
-        let placeholder = match (self.config.actions, layout.inner_width >= 62) {
+        let placeholder = if self.scope == "text" {
+            "search what every pane printed and every agent said…"
+        } else {
+            match (self.config.actions, layout.inner_width >= 62) {
             (false, true) => PLACEHOLDER,
             (false, false) => PLACEHOLDER_SHORT,
             (true, true) => PLACEHOLDER_ACTIONS,
             (true, false) => PLACEHOLDER_ACTIONS_SHORT,
+            }
         };
         if let Some((_, old_title)) = &self.pending_rename {
             rows.push(format!(
@@ -998,11 +1201,18 @@ impl Bar {
         let selected = if self.rows.is_empty() { None } else { Some(self.rows[self.selected].item) };
         let mut preview_body: Vec<String> = Vec::new();
         if layout.preview_width != 0 {
-            let (lines, loading) = self.preview_lines(selected);
+            let (lines, marks, loading) = if self.scope == "text" {
+                let (lines, marks) = self.text_preview(layout.preview_width);
+                (lines, marks, self.text_busy())
+            } else {
+                let (lines, loading) = self.preview_lines(selected);
+                (lines, Vec::new(), loading)
+            };
             preview_body = render::render_preview(
                 &self.theme,
                 selected.map(|i| &self.pool[i]),
                 &lines,
+                &marks,
                 layout.preview_width,
                 layout.list_height,
                 loading,
@@ -1052,6 +1262,24 @@ impl Bar {
     }
 
     fn list_rows(&mut self, layout: &Layout) -> Vec<String> {
+        if self.rows.is_empty() && self.scope == "text" {
+            let (headline, detail, hint) = if char_len(pystr::strip(&self.query)) < fulltext::MIN_QUERY {
+                (
+                    "full-text search".to_string(),
+                    "every agent transcript and pane's scrollback".to_string(),
+                    format!("type {}+ characters · ⌫ back to everything", fulltext::MIN_QUERY),
+                )
+            } else if self.text_busy() {
+                ("searching…".to_string(), String::new(), String::new())
+            } else {
+                ("no matches".to_string(), format!("for “{}”", self.text_asked), "^u clears the query".to_string())
+            };
+            let notice = render::render_notice(&self.theme, layout.list_width, &headline, &detail, &hint);
+            let top = ((layout.list_height - notice.len() as isize).max(0) / 2) as usize;
+            let mut out = vec![String::new(); top];
+            out.extend(notice);
+            return out;
+        }
         if self.rows.is_empty() {
             let filter = if self.scope != "all" { scope_chip(self.scope) } else { "" };
             let empty = render::render_empty_state(&self.theme, layout.list_width, &self.query, !self.items().is_empty(), filter);
@@ -1070,11 +1298,16 @@ impl Bar {
                 String::new()
             } else {
                 let item_index = self.rows[position].item;
-                let age = self.age_of(item_index);
+                let text_row = self.text_row(position, item_index);
+                let age = if text_row.is_some() { None } else { self.age_of(item_index) };
+                let (item, row) = match &text_row {
+                    Some((item, row)) => (item, row),
+                    None => (&self.pool[item_index], &self.rows[position]),
+                };
                 render::render_row(
                     &self.theme,
-                    &self.pool[item_index],
-                    &self.rows[position],
+                    item,
+                    row,
                     content_width,
                     position == self.selected,
                     show_workspace,
@@ -1117,6 +1350,16 @@ impl Bar {
         ];
         if width < 52 {
             hints = vec![("↑↓", ""), ("⏎", ""), ("esc", "")];
+        }
+        if self.scope == "text" {
+            let counter = if self.text_busy() {
+                "searching…".to_string()
+            } else if self.text_asked.is_empty() {
+                String::new()
+            } else {
+                format!("{} panes", self.rows.len())
+            };
+            return render::render_footer(&self.theme, width, &hints, &counter);
         }
         let total = match self.scope {
             "pane" => self.pane_items().len(),
@@ -1169,6 +1412,7 @@ impl Bar {
             }
             self.pump_preview(self.list_height);
             self.pump_ages();
+            self.pump_text();
             if self.status.as_deref().map(|s| !s.is_empty()).unwrap_or(false) && now >= self.status_until {
                 self.status = None;
                 self.dirty = true;
@@ -1233,6 +1477,13 @@ impl Bar {
         let mut deadline = self.last_refresh + self.config.refresh_ms as f64 / 1000.0;
         if let Some((_, due)) = &self.preview_pending {
             deadline = deadline.min(*due);
+        }
+        if let Some(due) = self.text_due {
+            deadline = deadline.min(due);
+        }
+        if self.text_search.is_running() {
+            // The search reports on a channel, not a descriptor: look often.
+            deadline = deadline.min(now + 0.05);
         }
         if let Some(escape) = escape_deadline {
             deadline = deadline.min(escape);
@@ -2170,8 +2421,9 @@ mod tests {
         assert_eq!((t.bar.scope, t.bar.query.as_str()), ("all", ">"));
         t.bar.set_query(String::new(), None);
         let mut seen = Vec::new();
-        // One press per filter there is, which brings it back to "all".
-        for _ in 0..SCOPES.len() - 1 {
+        // One press per filter tab visits (not "action", not full text),
+        // which brings it back to "all".
+        for _ in 0..SCOPES.len() - 2 {
             t.bar.handle_key("tab");
             seen.push(t.bar.scope);
         }
@@ -2979,5 +3231,145 @@ mod tests {
         let with = joined(&t.bar.compose(140, 20));
         assert!(with.contains("run an action"), "{}", with);
         assert!(with.contains("> actions"), "{}", with);
+    }
+
+    // -- full text ----------------------------------------------------------
+
+    fn hits_for(pane_id: &str, tab_id: &str, count: usize, snippet: &str) -> PaneHits {
+        PaneHits {
+            pane_id: pane_id.into(),
+            tab_id: tab_id.into(),
+            count,
+            hits: vec![fulltext::Hit {
+                timestamp: "2026-11-07T22:10:00Z".into(),
+                role: "user",
+                snippet: snippet.into(),
+                context: format!("before {} after", snippet),
+            }],
+        }
+    }
+
+    #[test]
+    fn slash_opens_full_text_without_searching_yet() {
+        let mut t = bar();
+        t.bar.insert("/", false);
+        assert_eq!((t.bar.scope, t.bar.query.as_str()), ("text", ""));
+        assert!(t.bar.rows.is_empty());
+        assert!(!t.bar.text_busy(), "an empty query searches nothing");
+        t.bar.insert("x", false);
+        assert!(!t.bar.text_busy(), "one character would match everything");
+        t.bar.insert("y", false);
+        assert!(t.bar.text_due.is_some(), "two characters queue a search");
+        assert!(!t.bar.text_search.is_running(), "it waits for typing to pause");
+    }
+
+    #[test]
+    fn tab_never_reaches_full_text() {
+        let mut t = bar();
+        let mut seen = Vec::new();
+        for _ in 0..SCOPES.len() * 2 {
+            t.bar.handle_key("tab");
+            seen.push(t.bar.scope);
+            t.bar.handle_key("shift+tab");
+            t.bar.handle_key("shift+tab");
+            seen.push(t.bar.scope);
+        }
+        assert!(!seen.contains(&"text"), "{:?}", seen);
+    }
+
+    #[test]
+    fn leaving_full_text_drops_its_search() {
+        let mut t = bar();
+        t.bar.insert("/", false);
+        t.bar.insert("needle", true);
+        assert!(t.bar.text_busy());
+        t.bar.set_query(String::new(), None);
+        t.bar.backspace();
+        assert_eq!(t.bar.scope, "all");
+        assert!(!t.bar.text_busy());
+        assert!(t.bar.text_asked.is_empty());
+        assert!(!t.bar.rows.is_empty(), "the regular rows come back");
+    }
+
+    #[test]
+    fn enter_waits_for_a_pending_search_instead_of_jumping() {
+        let mut t = bar();
+        t.bar.insert("/", false);
+        t.bar.insert("needle", true);
+        assert!(t.bar.handle_key("enter").is_none());
+        assert_eq!(t.bar.text_due, Some(0.0), "enter starts the search now");
+        t.bar.text_search.cancel();
+        t.bar.text_due = None;
+    }
+
+    #[test]
+    fn full_text_rows_land_on_the_pane_that_matched() {
+        let mut t = bar();
+        let agent = item_index(&t.bar, |i| i.kind == KIND_AGENT);
+        let (agent_pane, agent_tab) =
+            (t.bar.pool[agent].pane_id.clone().unwrap(), t.bar.pool[agent].tab_id.clone().unwrap());
+        let tab = item_index(&t.bar, |i| i.kind == KIND_TAB);
+        let tab_id = t.bar.pool[tab].tab_id.clone().unwrap();
+        t.bar.insert("/", false);
+        t.bar.insert("needle", true);
+        t.bar.text_due = None;
+        t.bar.text_shown = "needle".into();
+        t.bar.text_results = vec![
+            hits_for(&agent_pane, &agent_tab, 3, "agent said needle"),
+            hits_for("shell-pane-without-a-row", &tab_id, 1, "shell printed needle"),
+            hits_for("gone", "no-such-tab", 1, "nowhere"),
+        ];
+        t.bar.rebuild(None);
+        assert_eq!(t.bar.rows.len(), 2, "a pane with no row anywhere is dropped");
+        assert_eq!(t.bar.rows[0].item, agent);
+        assert_eq!(t.bar.rows[1].item, tab);
+        assert_eq!(t.bar.chosen_text_pane().as_deref(), Some(agent_pane.as_str()));
+        t.bar.handle_key("down");
+        assert_eq!(t.bar.chosen_text_pane().as_deref(), Some("shell-pane-without-a-row"));
+        let (preview, marks) = t.bar.text_preview(80);
+        assert_eq!(preview[0], "── 11-07 22:10 user ");
+        assert!(preview[1].contains("shell printed needle"));
+        let at = preview[1].find("needle").map(|b| preview[1][..b].chars().count()).unwrap();
+        assert_eq!(marks[1], (at..at + 6).collect::<Vec<_>>(), "the preview marks the match");
+        assert!(marks[0].is_empty(), "headers carry no marks");
+    }
+
+    #[test]
+    fn full_text_rows_mark_the_match_in_their_detail() {
+        let mut t = bar();
+        let agent = item_index(&t.bar, |i| i.kind == KIND_AGENT);
+        let (pane, tab) = (t.bar.pool[agent].pane_id.clone().unwrap(), t.bar.pool[agent].tab_id.clone().unwrap());
+        t.bar.insert("/", false);
+        t.bar.insert("needle", true);
+        t.bar.text_due = None;
+        t.bar.text_shown = "NEEDLE".into();
+        t.bar.text_results = vec![hits_for(&pane, &tab, 2, "the Needle here")];
+        t.bar.rebuild(None);
+        let (item, row) = t.bar.text_row(0, agent).unwrap();
+        assert_eq!(item.detail, "2 hits · the Needle here");
+        let marks = &row.field_positions[&TEXT_DETAIL_FIELD];
+        let marked: String = marks.iter().map(|&m| item.detail.chars().nth(m).unwrap()).collect();
+        assert_eq!(marked, "Needle");
+    }
+
+    #[test]
+    fn the_preview_draws_marks_as_matches() {
+        let t = bar();
+        let item = &t.bar.pool[item_index(&t.bar, |i| i.kind == KIND_AGENT)];
+        let lines = vec!["say needle now".to_string(), "plain".to_string()];
+        let marks = vec![vec![4, 5, 6, 7, 8, 9], Vec::new()];
+        let marked = render::render_preview(&t.bar.theme, Some(item), &lines, &marks, 40, 6, false);
+        let plain = render::render_preview(&t.bar.theme, Some(item), &lines, &[], 40, 6, false);
+        let at = marked.iter().position(|l| l.contains("needle")).unwrap();
+        assert_ne!(marked[at], plain[at], "the marked line is drawn differently");
+        assert!(marked[at].contains(crate::theme::UNDERLINE), "matches are underlined: {:?}", marked[at]);
+        assert!(!plain[at].contains(crate::theme::UNDERLINE));
+        assert_eq!(marked[at + 1], plain[at + 1], "lines without marks are unchanged");
+    }
+
+    #[test]
+    fn a_search_on_another_scope_has_no_chosen_pane() {
+        let t = bar();
+        assert_eq!(t.bar.chosen_text_pane(), None);
     }
 }

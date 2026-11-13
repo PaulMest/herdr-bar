@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add full-text search: `/` on an empty query searches what every pane printed
+  and every agent said, instead of row names. Claude and Codex panes are
+  searched through their transcripts on disk, since full-screen agents leave
+  little in Herdr's scrollback; other panes through Herdr's scrollback. The
+  search starts when typing pauses, runs on its own thread, and a newer query
+  cancels an older one. Rows show the hit count and the latest hit, the preview
+  shows recent hits in context, and `enter` focuses the exact pane. `tab` does
+  not cycle into it. `herdr-bar --search <query>` prints the same results as
+  JSON. The empty-query hint now lists `/ text`.
+
 - Add OpenCode as an `auto_titles` source (#29). OpenCode prints `OpenCode`
   until the session has a title, and `OC | <title>` after that, so the title is
   read from the terminal title Herdr already reports and no transcript is

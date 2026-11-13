@@ -295,6 +295,14 @@ impl TranscriptReader {
         None
     }
 
+    /// The transcript of a Claude session, if one can be found.
+    pub fn find_path(&self, session_id: &str, cwd: &str) -> Option<PathBuf> {
+        if !is_session_id(session_id) {
+            return None;
+        }
+        self.find(session_id, cwd)
+    }
+
     pub fn title(&mut self, session_id: &str, cwd: &str) -> String {
         if !is_session_id(session_id) {
             return String::new();

@@ -527,10 +527,29 @@ pub fn render_empty_state(theme: &Theme, width: isize, query: &str, has_items: b
     lines
 }
 
+/// Centered lines for an empty list: a bold headline, then muted detail and
+/// a dim hint, each skipped when empty.
+pub fn render_notice(theme: &Theme, width: isize, headline: &str, detail: &str, hint: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (text, role, bold) in [(headline, "text", true), (detail, "muted", false), (hint, "unknown", false)] {
+        if text.is_empty() {
+            continue;
+        }
+        let text = truncate(text, width);
+        let left = ((width - display_width(&text) as isize) / 2).max(0) as usize;
+        let rendered = segments_to_text(theme, &[Segment::bold(role, text, bold)], "");
+        lines.push(pad(&format!("{}{}", " ".repeat(left), rendered), width));
+    }
+    lines
+}
+
+/// `marks` holds, line for line, the char positions in `lines` to draw as
+/// matches; it may be shorter than `lines`, or empty.
 pub fn render_preview(
     theme: &Theme,
     item: Option<&Item>,
     lines: &[String],
+    marks: &[Vec<usize>],
     width: isize,
     height: isize,
     loading: bool,
@@ -563,20 +582,29 @@ pub fn render_preview(
         out.truncate(height as usize);
         return out;
     }
-    let body: Vec<String> = if loading && lines.is_empty() {
-        vec!["…".into()]
+    let none: Vec<usize> = Vec::new();
+    let body: Vec<(String, &Vec<usize>)> = if loading && lines.is_empty() {
+        vec![("…".into(), &none)]
     } else if lines.is_empty() {
-        vec!["no output yet".into()]
+        vec![("no output yet".into(), &none)]
     } else {
         let skip = lines.len().saturating_sub(body_height as usize);
-        lines[skip..].to_vec()
+        (skip..lines.len()).map(|i| (lines[i].clone(), marks.get(i).unwrap_or(&none))).collect()
     };
     for _ in 0..(body_height - body.len() as isize).max(0) {
         out.push(String::new());
     }
     let skip = body.len().saturating_sub(body_height as usize);
-    for line in &body[skip..] {
-        out.push(segments_to_text(theme, &[Segment::new("muted", truncate(line, width))], ""));
+    for (line, line_marks) in &body[skip..] {
+        let shown = truncate(line, width);
+        if line_marks.is_empty() {
+            out.push(segments_to_text(theme, &[Segment::new("muted", shown)], ""));
+        } else {
+            // Truncation keeps a prefix, so marks past the cut just drop.
+            let limit = pystr::len(&shown);
+            let kept: Vec<usize> = line_marks.iter().copied().filter(|&m| m < limit).collect();
+            out.push(segments_to_text(theme, &highlight(&shown, &kept, "muted", false), ""));
+        }
     }
     out.truncate(height as usize);
     out
@@ -601,7 +629,7 @@ fn render_action_preview(theme: &Theme, item: &Item, width: isize, height: isize
 
 /// `text` in lines of at most `width` columns, broken between words where
 /// it can be.
-fn wrap(text: &str, width: isize) -> Vec<String> {
+pub fn wrap(text: &str, width: isize) -> Vec<String> {
     let width = width.max(1) as usize;
     let mut lines: Vec<String> = Vec::new();
     let mut line = String::new();

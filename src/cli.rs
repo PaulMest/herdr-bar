@@ -24,6 +24,7 @@ usage: run.py [options]
 options:
   --open      open the bar popup through the Herdr CLI
   --list      print the rows the bar would show, as JSON
+  --search Q  full-text search every pane for Q, as JSON (the bar's / filter)
   --doctor    print environment diagnostics
   --version   print the plugin version
   --help      show this message
@@ -162,6 +163,38 @@ fn list(client: &mut HerdrClient) -> crate::client::Result<i32> {
     Ok(0)
 }
 
+/// The `/` filter's search, without the bar: one entry per pane with hits.
+fn search(client: &mut HerdrClient, query: &str) -> crate::client::Result<i32> {
+    let snapshot = client.snapshot()?;
+    let targets = crate::fulltext::targets(&snapshot);
+    let generation = std::sync::atomic::AtomicU64::new(0);
+    let found = crate::fulltext::search(&targets, query, &generation, 0).unwrap_or_default();
+    let payload: Vec<Value> = found
+        .iter()
+        .map(|pane| {
+            let mut map = Map::new();
+            map.insert("pane_id", Value::str(pane.pane_id.clone()));
+            map.insert("tab_id", Value::str(pane.tab_id.clone()));
+            map.insert("count", Value::Int(pane.count as i128));
+            let hits: Vec<Value> = pane
+                .hits
+                .iter()
+                .map(|hit| {
+                    let mut entry = Map::new();
+                    entry.insert("timestamp", Value::str(hit.timestamp.clone()));
+                    entry.insert("role", Value::str(hit.role));
+                    entry.insert("snippet", Value::str(hit.snippet.clone()));
+                    Value::Dict(entry)
+                })
+                .collect();
+            map.insert("hits", Value::List(hits));
+            Value::Dict(map)
+        })
+        .collect();
+    out(&(pyjson::dumps_indent(&Value::List(payload), 2) + "\n"));
+    Ok(0)
+}
+
 pub fn main(args: Vec<String>) -> i32 {
     let has = |flag: &str| args.iter().any(|a| a == flag);
     if has("--help") || has("-h") {
@@ -209,6 +242,16 @@ pub fn main(args: Vec<String>) -> i32 {
 
     if has("--doctor") {
         return doctor(&mut client, &config);
+    }
+    if let Some(at) = args.iter().position(|a| a == "--search") {
+        let Some(query) = args.get(at + 1) else {
+            eprintln!("herdr-bar: --search needs a query");
+            return 1;
+        };
+        return match search(&mut client, query) {
+            Ok(code) => code,
+            Err(error) => fail(&error.message),
+        };
     }
     if has("--list") {
         return match list(&mut client) {
@@ -290,8 +333,13 @@ pub fn main(args: Vec<String>) -> i32 {
             Err(error) => fail(&error.message),
         };
     }
+    let text_pane = bar.chosen_text_pane();
     if let Err(error) = jump(&mut bar.client, &item) {
         return fail(&error.message);
+    }
+    if let Some(pane_id) = text_pane {
+        // A full-text hit names its exact pane; the row may be its tab's.
+        let _ = bar.client.focus_pane(&pane_id);
     }
     let current_key = bar.current_key.clone();
     let current_title = bar.current_title.clone();

@@ -297,6 +297,7 @@ Whichever you pick, Cmd+K is likely already taken by the terminal (usually
 | `tab` / `shift+tab` | cycle the filter |
 | `@` `%` `$` `!` on an empty query | filter to agents / panes / plain tabs / rows that need you |
 | `>` on an empty query | filter to plugin actions, with `"actions": true` |
+| `/` on an empty query | full-text search: what every pane printed and every agent said |
 | `backspace` on an empty query | clear the filter, then close the selected row's tab |
 | `delete` (fn+`⌫` on a Mac laptop) | close the selected row's tab, whatever is typed |
 | `ctrl+u` / `ctrl+w` / `ctrl+d` | clear the query and return to the opening filter / delete a word / forward delete |
@@ -313,6 +314,27 @@ and its pane; selecting a workspace focuses the workspace.
 list. Named panes also appear in Everything and participate in its searches;
 the pane filter narrows the list to just those direct pane targets. Selecting a
 pane focuses its tab and that exact pane.
+
+**Full-text search.** `/` on an empty query switches from matching names to
+matching content. Type at least two characters; the search starts once typing
+pauses and runs beside the bar, so keys never wait on it. It is a literal,
+case-insensitive match, and it runs only in this filter: `tab` never lands on
+it, and `backspace` on an empty query leaves it.
+
+Full-screen agents keep almost nothing in Herdr's scrollback, so Claude and
+Codex panes are searched through the transcript each agent writes to disk:
+prompts, replies, and tool calls and output. A Claude pane finds its transcript
+through the session id Herdr reports, in the same `claude_config_dirs` that
+auto titles search. A Codex pane without a session id is matched by its title
+against Codex's thread index (`$CODEX_HOME/session_index.jsonl`, default
+`~/.codex`); when two threads share a name, the newest wins. Every other pane is
+searched through Herdr's scrollback.
+
+One row per pane with hits, newest hit first: the row's usual name, the hit
+count and the text around the latest hit. The preview lists the newest hits
+with more context and when each was said. `enter` jumps to the exact pane the
+hits came from, even when that pane's row is its tab's. `herdr-bar --search
+<query>` runs the same search without the bar and prints JSON.
 
 **Plugin actions.** With `"actions": true`, every plugin action you could bind
 a key to is a row too: its title, what it says it does, and the plugin it comes
